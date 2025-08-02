@@ -1,0 +1,11 @@
+{
+  "total_chunks": 276,
+  "embedding_dimension": 384,
+  "languages": [
+    "pt"
+  ],
+  "avg_chunk_length": 160.13768115942028,
+  "total_documents": 20,
+  "has_financial_content": 226,
+  "embedding_model": 384
+}

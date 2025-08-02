@@ -1,0 +1,26 @@
+{
+  "portuguese": [
+    "Como funciona o PIX no InfinitePay?",
+    "Quais são as taxas de transação?",
+    "Como posso integrar o sistema de pagamentos?",
+    "O que fazer se minha transação foi negada?",
+    "Como funciona a segurança dos pagamentos?",
+    "Quais cartões são aceitos?",
+    "Como receber pagamentos online?",
+    "Qual o limite de transações por dia?",
+    "Como consultar minhas vendas?",
+    "O InfinitePay tem suporte 24 horas?"
+  ],
+  "english": [
+    "How does PIX work with InfinitePay?",
+    "What are the transaction fees?",
+    "How can I integrate the payment system?",
+    "What should I do if my transaction was declined?",
+    "How does payment security work?",
+    "Which cards are accepted?",
+    "How to receive online payments?",
+    "What's the daily transaction limit?",
+    "How to check my sales?",
+    "Does InfinitePay have 24/7 support?"
+  ]
+}
