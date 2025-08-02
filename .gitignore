@@ -207,3 +207,8 @@ marimo/_lsp/
 __marimo__/
 *.sh
 Miniconda*
+
+# Tempo
+node_modules/
+**/tempobook/dynamic/
+**/tempobook/storyboards/
