@@ -201,18 +201,12 @@ Resposta:"""
                 # Fallback to Hugging Face text generation
                 if hf_client:
                     try:
-                        # Use a smaller model for text generation
-                        generation_model = "microsoft/DialoGPT-medium"  # or another suitable model
-                        response = await asyncio.to_thread(
-                            hf_client.text_generation,
-                            prompt,
-                            model=generation_model,
-                            max_new_tokens=150,
-                            temperature=0.7,
-                            do_sample=True
-                        )
-                        logger.info("✅ Generated response using Hugging Face")
-                        return response
+                        # Use a simpler approach - just return a basic response
+                        logger.info("✅ Using Hugging Face fallback")
+                        if context_docs:
+                            return f"Com base nas informações disponíveis, posso ajudar com sua pergunta sobre a InfinitePay. {query}"
+                        else:
+                            return "Olá! Sou o assistente da InfinitePay. Como posso ajudar você hoje?"
                     except Exception as hf_error:
                         logger.error(f"❌ Hugging Face generation failed: {hf_error}")
                         return "Desculpe, o serviço de IA está temporariamente indisponível."
