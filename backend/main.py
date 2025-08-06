@@ -134,12 +134,14 @@ class RAGService:
             logger.warning("Hugging Face client not available for embedding.")
             return None
         try:
+            logger.info(f"Getting embedding for text: {text[:50]}...")
             # Use the sentence-transformers model for embeddings
             embedding = await asyncio.to_thread(
                 hf_client.feature_extraction,
                 text,
                 model="sentence-transformers/all-MiniLM-L6-v2"
             )
+            logger.info(f"✅ Embedding generated successfully, length: {len(embedding) if embedding else 0}")
             return embedding
         except Exception as e:
             logger.error(f"❌ Error getting embedding from Hugging Face: {e}")
