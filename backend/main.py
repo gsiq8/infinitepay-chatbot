@@ -1,7 +1,7 @@
 """
 FastAPI RAG Backend for InfinitePay AI Chatbot
-Integrates Supabase vector search with Hugging Face for embeddings and an LLM for generation.
-Version: 1.1.2 (Fixed IndentationError)
+Integrates Supabase vector search with Hugging Face for embeddings and text generation.
+Version: 1.2.0 (HF Inference only)
 """
 
 # CRITICAL: Load environment variables FIRST, before any other imports
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(
     title="InfinitePay AI Chatbot API",
     description="RAG-powered chatbot for InfinitePay customer support, using Supabase and Hugging Face.",
-    version="1.1.2"
+    version="1.2.0"
 )
 
 # --- CORS Middleware ---
@@ -64,7 +64,6 @@ class HealthResponse(BaseModel):
 # --- Global Variables ---
 supabase_client: Client = None
 hf_client: InferenceClient = None
-ollama_base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 
 # --- Startup Event ---
 @app.on_event("startup")
@@ -72,7 +71,7 @@ async def startup_event():
     """Initialize services on application startup."""
     global supabase_client, hf_client
 
-    logger.info("🚀 Starting InfinitePay AI Chatbot v1.1.2")
+    logger.info("🚀 Starting InfinitePay AI Chatbot v1.2.0")
 
     # Environment variable check
     supabase_url = os.getenv('SUPABASE_URL')
@@ -83,7 +82,6 @@ async def startup_event():
     logger.info(f"   SUPABASE_URL: {'✅ Set' if supabase_url else '❌ Not set'}")
     logger.info(f"   SUPABASE_KEY: {'✅ Set' if supabase_key else '❌ Not set'}")
     logger.info(f"   HF_TOKEN: {'✅ Set' if hf_token else '❌ Not set'}")
-    logger.info(f"   OLLAMA_BASE_URL: {ollama_base_url}")
 
     # Initialize Supabase
     if supabase_url and supabase_key:
@@ -99,13 +97,16 @@ async def startup_event():
     # Initialize Hugging Face Inference Client
     if hf_token:
         try:
-            hf_client = InferenceClient(model="sentence-transformers/all-MiniLM-L6-v2", token=hf_token)
+            hf_client = InferenceClient(
+                provider="hf-inference",
+                api_key=hf_token
+            )
             logger.info("✅ Hugging Face Inference Client initialized.")
         except Exception as e:
             logger.error(f"❌ Hugging Face Inference Client initialization failed: {e}")
             hf_client = None
     else:
-        logger.warning("⚠️ HF_TOKEN not found. Embedding features will be disabled.")
+        logger.warning("⚠️ HF_TOKEN not found. AI features will be disabled.")
 
     logger.info("🎉 Services initialization complete.")
 
@@ -133,8 +134,12 @@ class RAGService:
             logger.warning("Hugging Face client not available for embedding.")
             return None
         try:
-            # Run the synchronous SDK call in a separate thread
-            embedding = await asyncio.to_thread(hf_client.feature_extraction, text)
+            # Use the sentence-transformers model for embeddings
+            embedding = await asyncio.to_thread(
+                hf_client.feature_extraction,
+                text,
+                model="sentence-transformers/all-MiniLM-L6-v2"
+            )
             return embedding
         except Exception as e:
             logger.error(f"❌ Error getting embedding from Hugging Face: {e}")
@@ -165,12 +170,13 @@ class RAGService:
 
     @staticmethod
     async def generate_response(query: str, context_docs: List[Dict]) -> str:
-        """Generates a response using an LLM with retrieved context."""
+        """Generates a response using Hugging Face Inference API."""
         try:
             context = "\n\n".join([
                 f"Documento: {doc.get('page_title', 'Sem título')}\n{doc['content']}"
                 for doc in context_docs[:3]
             ])
+            
             prompt = f"""Você é um assistente da InfinitePay. Responda à pergunta do cliente baseando-se APENAS no contexto abaixo. Se a informação não estiver no contexto, diga que não sabe.
 
 Contexto:
@@ -180,39 +186,29 @@ Pergunta: {query}
 
 Resposta:"""
 
-            # Try Ollama first
-            model_name = os.getenv('OLLAMA_MODEL', 'llama3')
+            if not hf_client:
+                logger.error("❌ Hugging Face client not available")
+                return "Desculpe, o serviço de IA está temporariamente indisponível."
+
             try:
-                async with httpx.AsyncClient(timeout=60.0) as client:
-                    response = await client.post(
-                        f"{ollama_base_url}/api/generate",
-                        json={"model": model_name, "prompt": prompt, "stream": False}
-                    )
-                if response.status_code == 200:
-                    result = response.json()
-                    logger.info(f"✅ Generated response using Ollama LLM: {model_name}")
-                    return result.get('response', 'Desculpe, não consegui gerar uma resposta.')
+                # Use the SmolLM3-3B model for text generation
+                response = await asyncio.to_thread(
+                    hf_client.text_generation,
+                    prompt,
+                    model="HuggingFaceTB/SmolLM3-3B",
+                    max_new_tokens=200,
+                    temperature=0.7,
+                    do_sample=True
+                )
+                logger.info("✅ Generated response using Hugging Face SmolLM3-3B")
+                return response
+            except Exception as hf_error:
+                logger.error(f"❌ Hugging Face generation failed: {hf_error}")
+                # Fallback to simple response
+                if context_docs:
+                    return f"Com base nas informações disponíveis, posso ajudar com sua pergunta sobre a InfinitePay. {query}"
                 else:
-                    logger.warning(f"⚠️ Ollama not available, trying Hugging Face: {response.status_code}")
-                    raise Exception("Ollama not available")
-            except Exception as e:
-                logger.warning(f"⚠️ Ollama failed, using Hugging Face: {e}")
-                
-                # Fallback to Hugging Face text generation
-                if hf_client:
-                    try:
-                        # Use a simpler approach - just return a basic response
-                        logger.info("✅ Using Hugging Face fallback")
-                        if context_docs:
-                            return f"Com base nas informações disponíveis, posso ajudar com sua pergunta sobre a InfinitePay. {query}"
-                        else:
-                            return "Olá! Sou o assistente da InfinitePay. Como posso ajudar você hoje?"
-                    except Exception as hf_error:
-                        logger.error(f"❌ Hugging Face generation failed: {hf_error}")
-                        return "Desculpe, o serviço de IA está temporariamente indisponível."
-                else:
-                    logger.error("❌ No LLM service available")
-                    return "Desculpe, o serviço de IA está temporariamente indisponível."
+                    return "Olá! Sou o assistente da InfinitePay. Como posso ajudar você hoje?"
                     
         except Exception as e:
             logger.error(f"❌ Error generating LLM response: {e}")
@@ -222,7 +218,7 @@ Resposta:"""
 @app.get("/")
 def read_root():
     """Root endpoint with basic API info."""
-    return {"message": "InfinitePay AI Chatbot API is running!", "status": "healthy", "version": "1.1.2"}
+    return {"message": "InfinitePay AI Chatbot API is running!", "status": "healthy", "version": "1.2.0"}
 
 @app.get("/ping")
 def ping():
@@ -268,11 +264,11 @@ async def health_check():
         else: services["embeddings"] = "disabled"
 
     async def check_llm():
-        try:
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                response = await client.get(ollama_base_url)
-                services["llm"] = "healthy" if response.status_code == 200 else "error"
-        except Exception: services["llm"] = "error"
+        # The LLM service is now Hugging Face Inference, so we check its availability
+        if hf_client:
+            services["llm"] = "healthy"
+        else:
+            services["llm"] = "disabled"
 
     await asyncio.gather(check_db(), check_embeddings(), check_llm())
     
