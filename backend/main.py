@@ -98,7 +98,7 @@ async def startup_event():
     if hf_token:
         try:
             hf_client = InferenceClient(
-                provider="hf-inference",
+                provider="fireworks-ai",
                 api_key=hf_token
             )
             logger.info("✅ Hugging Face Inference Client initialized.")
@@ -160,14 +160,23 @@ class RAGService:
             return []
 
         try:
+            logger.info(f"Performing similarity search for query: '{query}' with embedding length: {len(query_embedding)}")
             result = supabase_client.rpc(
                 'similarity_search',
                 {'query_embedding': query_embedding, 'match_count': k}
             ).execute()
             logger.info(f"✅ Similarity search returned {len(result.data or [])} results.")
+            logger.info(f"Raw result: {result}")
             return result.data or []
         except Exception as e:
             logger.error(f"❌ Error in similarity search RPC call: {e}")
+            # Try to get some basic info about the documents table
+            try:
+                logger.info("Trying to get basic document count...")
+                basic_result = supabase_client.table('documents').select('id', count='exact').limit(1).execute()
+                logger.info(f"Basic query result: {basic_result}")
+            except Exception as basic_error:
+                logger.error(f"❌ Even basic query failed: {basic_error}")
             return []
 
     @staticmethod
@@ -179,31 +188,29 @@ class RAGService:
                 for doc in context_docs[:3]
             ])
             
-            prompt = f"""Você é um assistente da InfinitePay. Responda à pergunta do cliente baseando-se APENAS no contexto abaixo. Se a informação não estiver no contexto, diga que não sabe.
-
-Contexto:
-{context}
-
-Pergunta: {query}
-
-Resposta:"""
-
             if not hf_client:
                 logger.error("❌ Hugging Face client not available")
                 return "Desculpe, o serviço de IA está temporariamente indisponível."
 
             try:
-                # Use the SmolLM3-3B model for text generation
-                response = await asyncio.to_thread(
-                    hf_client.text_generation,
-                    prompt,
-                    model="HuggingFaceTB/SmolLM3-3B",
-                    max_new_tokens=200,
-                    temperature=0.7,
-                    do_sample=True
+                # Use the Llama 3.1-8B-Instruct model for text generation
+                completion = hf_client.chat.completions.create(
+                    model="meta-llama/Llama-3.1-8B-Instruct",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": "Você é um assistente da InfinitePay. Responda à pergunta do cliente baseando-se APENAS no contexto fornecido. Se a informação não estiver no contexto, diga que não sabe."
+                        },
+                        {
+                            "role": "user",
+                            "content": f"Contexto:\n{context}\n\nPergunta: {query}\n\nResposta:"
+                        }
+                    ]
                 )
-                logger.info("✅ Generated response using Hugging Face SmolLM3-3B")
-                return response
+                
+                response_text = completion.choices[0].message.content
+                logger.info("✅ Generated response using Hugging Face Llama 3.1-8B-Instruct")
+                return response_text
             except Exception as hf_error:
                 logger.error(f"❌ Hugging Face generation failed: {hf_error}")
                 # Fallback to simple response
