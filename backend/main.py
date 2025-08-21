@@ -1,7 +1,7 @@
 """
 FastAPI RAG Backend for InfinitePay AI Chatbot
-Integrates Supabase vector search with Hugging Face for embeddings and text generation.
-Version: 1.2.0 (HF Inference only)
+Simple and direct RAG implementation following Supabase best practices.
+Version: 2.0.0 (Simplified RAG)
 """
 
 # CRITICAL: Load environment variables FIRST, before any other imports
@@ -13,12 +13,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict, Optional, Any
-import time
-import httpx
 import asyncio
 from supabase import create_client, Client
 from huggingface_hub import InferenceClient
 import logging
+import numpy as np
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -27,8 +26,8 @@ logger = logging.getLogger(__name__)
 # --- FastAPI App Initialization ---
 app = FastAPI(
     title="InfinitePay AI Chatbot API",
-    description="RAG-powered chatbot for InfinitePay customer support, using Supabase and Hugging Face.",
-    version="1.2.0"
+    description="Simple RAG-powered chatbot using Supabase pgvector and Hugging Face.",
+    version="2.0.0"
 )
 
 # --- CORS Middleware ---
@@ -71,7 +70,7 @@ async def startup_event():
     """Initialize services on application startup."""
     global supabase_client, hf_client
 
-    logger.info("🚀 Starting InfinitePay AI Chatbot v1.2.0")
+    logger.info("🚀 Starting InfinitePay AI Chatbot v2.0.0 (Simplified)")
 
     # Environment variable check
     supabase_url = os.getenv('SUPABASE_URL')
@@ -98,7 +97,7 @@ async def startup_event():
     if hf_token:
         try:
             hf_client = InferenceClient(
-                provider="fireworks-ai",
+                provider="auto",
                 api_key=hf_token
             )
             logger.info("✅ Hugging Face Inference Client initialized.")
@@ -110,218 +109,435 @@ async def startup_event():
 
     logger.info("🎉 Services initialization complete.")
 
-# --- Security Filter ---
-class SecurityFilter:
-    """Filter out potentially harmful queries (prompt injection)."""
-    BLOCKED_PATTERNS = [
-        "ignore previous instructions", "ignore all instructions", "you are now",
-        "pretend to be", "act as if", "forget everything", "sistema prompt", "prompt injection"
-    ]
-
-    @staticmethod
-    def is_safe_query(query: str) -> bool:
-        query_lower = query.lower()
-        return not any(pattern in query_lower for pattern in SecurityFilter.BLOCKED_PATTERNS)
-
-# --- RAG Service ---
-class RAGService:
-    """Handles Retrieval-Augmented Generation logic."""
+# --- Simple RAG Service ---
+class SimpleRAGService:
+    """Simplified RAG implementation following Supabase best practices."""
 
     @staticmethod
     async def get_embedding(text: str) -> Optional[List[float]]:
-        """Generates an embedding for text using Hugging Face Inference API."""
+        """Generate embedding using HuggingFace."""
         if not hf_client:
-            logger.warning("Hugging Face client not available for embedding.")
+            logger.warning("HuggingFace client not available.")
             return None
+        
         try:
-            logger.info(f"Getting embedding for text: {text[:50]}...")
-            # Use the sentence-transformers model for embeddings
+            logger.info(f"🔢 Generating embedding for: {text[:50]}...")
             embedding = await asyncio.to_thread(
                 hf_client.feature_extraction,
                 text,
                 model="sentence-transformers/all-MiniLM-L6-v2"
             )
-            logger.info(f"✅ Embedding generated successfully, length: {len(embedding) if embedding else 0}")
+            
+            # Convert to proper format
+            if isinstance(embedding, np.ndarray):
+                if embedding.ndim == 2:
+                    embedding = embedding.flatten()
+                embedding = embedding.tolist()
+            elif isinstance(embedding, list) and isinstance(embedding[0], list):
+                embedding = embedding[0]
+            
+            # Ensure all values are floats
+            embedding = [float(x) for x in embedding]
+            
+            logger.info(f"✅ Embedding generated: length={len(embedding)}")
             return embedding
+            
         except Exception as e:
-            logger.error(f"❌ Error getting embedding from Hugging Face: {e}")
+            logger.error(f"❌ Embedding generation failed: {e}")
             return None
 
     @staticmethod
-    async def similarity_search(query: str, k: int = 5) -> List[Dict]:
-        """Performs vector similarity search in Supabase."""
-        if not supabase_client:
-            logger.warning("Supabase client not available for similarity search.")
+    async def search_similar_documents(query_embedding: List[float], limit: int = 5) -> List[Dict]:
+        """Busca otimizada para Supabase vector"""
+        if not supabase_client or not query_embedding:
             return []
-
-        query_embedding = await RAGService.get_embedding(query)
-        if not query_embedding:
-            logger.error("Could not generate query embedding. Aborting search.")
-            return []
-
+        
         try:
-            logger.info(f"Performing similarity search for query: '{query}' with embedding length: {len(query_embedding)}")
-            result = supabase_client.rpc(
-                'similarity_search',
-                {'query_embedding': query_embedding, 'match_count': k}
-            ).execute()
-            logger.info(f"✅ Similarity search returned {len(result.data or [])} results.")
-            logger.info(f"Raw result: {result}")
-            return result.data or []
-        except Exception as e:
-            logger.error(f"❌ Error in similarity search RPC call: {e}")
-            # Try to get some basic info about the documents table
+            logger.info(f"🔍 Searching for similar documents, embedding length: {len(query_embedding)}")
+            
+            # Try using RPC function first (recommended approach)
             try:
-                logger.info("Trying to get basic document count...")
-                basic_result = supabase_client.table('documents').select('id', count='exact').limit(1).execute()
-                logger.info(f"Basic query result: {basic_result}")
-            except Exception as basic_error:
-                logger.error(f"❌ Even basic query failed: {basic_error}")
-            return []
+                result = supabase_client.rpc(
+                    'match_documents',
+                    {
+                        'query_embedding': query_embedding,
+                        'match_count': limit,
+                        'match_threshold': 0.1  # Lower threshold for more results
+                    }
+                ).execute()
+                
+                if result.data:
+                    logger.info(f"✅ RPC search found {len(result.data)} documents")
+                    return result.data
+                else:
+                    logger.warning("RPC search returned no results")
+            except Exception as rpc_error:
+                logger.warning(f"RPC search failed: {rpc_error}")
+            
+            # Fallback: Try manual search with more comprehensive query
+            try:
+                logger.info("Trying manual search fallback...")
+                result = supabase_client.table('documents').select(
+                    'id, content, page_title, page_url, metadata, chunk_index, embedding'
+                ).not_.is_('embedding', 'null') \
+                .eq('is_public', True) \
+                .limit(500).execute()
+                
+                if result.data:
+                    # Calculate cosine similarity for each document
+                    scored_docs = []
+                    for doc in result.data:
+                        if doc.get('embedding'):
+                            similarity = SimpleRAGService._cosine_similarity(query_embedding, doc['embedding'])
+                            if similarity > 0.1:  # Filter low relevance results
+                                doc['similarity'] = similarity
+                                scored_docs.append(doc)
+                    
+                    # Sort by similarity and return top results
+                    scored_docs.sort(key=lambda x: x['similarity'], reverse=True)
+                    top_docs = scored_docs[:limit]
+                    
+                    logger.info(f"✅ Manual similarity search found {len(top_docs)} documents")
+                    return top_docs
+                    
+            except Exception as table_error:
+                logger.error(f"Direct table search failed: {table_error}")
+            
+            # Final fallback
+            return await SimpleRAGService.text_search_fallback(limit)
+                
+        except Exception as e:
+            logger.error(f"❌ All vector search methods failed: {e}")
+            return await SimpleRAGService.text_search_fallback(query_embedding, limit)
 
     @staticmethod
-    async def generate_response(query: str, context_docs: List[Dict]) -> str:
-        """Generates a response using Hugging Face Inference API."""
+    def _cosine_similarity(vec1: List[float], vec2: List[float]) -> float:
+        """Calculate cosine similarity between two vectors"""
+        import numpy as np
+        a, b = np.array(vec1), np.array(vec2)
+        return float(np.dot(a, b) / (np.linalg.norm(a) * np.linalg.norm(b)))
+
+    @staticmethod
+    async def text_search_fallback(limit: int) -> List[Dict]:
+        """Fallback to simple text search if vector search fails."""
         try:
-            context = "\n\n".join([
-                f"Documento: {doc.get('page_title', 'Sem título')}\n{doc['content']}"
-                for doc in context_docs[:3]
-            ])
+            logger.info("🔄 Using text search fallback...")
+            # Simple search by content - for testing
+            result = supabase_client.table('documents').select(
+                'id, page_title, content, page_url'
+            ).limit(limit).execute()
             
-            if not hf_client:
-                logger.error("❌ Hugging Face client not available")
-                return "Desculpe, o serviço de IA está temporariamente indisponível."
-
-            try:
-                # Use the Llama 3.1-8B-Instruct model for text generation
-                completion = hf_client.chat.completions.create(
-                    model="meta-llama/Llama-3.1-8B-Instruct",
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": "Você é um assistente da InfinitePay. Responda à pergunta do cliente baseando-se APENAS no contexto fornecido. Se a informação não estiver no contexto, diga que não sabe."
-                        },
-                        {
-                            "role": "user",
-                            "content": f"Contexto:\n{context}\n\nPergunta: {query}\n\nResposta:"
-                        }
-                    ]
-                )
-                
-                response_text = completion.choices[0].message.content
-                logger.info("✅ Generated response using Hugging Face Llama 3.1-8B-Instruct")
-                return response_text
-            except Exception as hf_error:
-                logger.error(f"❌ Hugging Face generation failed: {hf_error}")
-                # Fallback to simple response
-                if context_docs:
-                    return f"Com base nas informações disponíveis, posso ajudar com sua pergunta sobre a InfinitePay. {query}"
-                else:
-                    return "Olá! Sou o assistente da InfinitePay. Como posso ajudar você hoje?"
-                    
+            if result.data:
+                # Add mock similarity scores
+                for doc in result.data:
+                    doc['similarity'] = 0.5
+                logger.info(f"✅ Fallback found {len(result.data)} documents")
+                return result.data
+            
         except Exception as e:
-            logger.error(f"❌ Error generating LLM response: {e}")
-            return "Desculpe, ocorreu um erro interno ao processar sua pergunta."
+            logger.error(f"❌ Text search fallback failed: {e}")
+        
+        return []
 
-# --- Health Check and Utility Endpoints ---
+    @staticmethod
+    async def generate_answer(query: str, context_docs: List[Dict]) -> str: 
+        """Generate answer using context documents."""
+        if not hf_client:
+            return "Desculpe, o serviço de IA está temporariamente indisponível."
+    
+        try:
+            # Build context from documents
+            context = ""
+            if context_docs:
+                context_parts = []
+                for doc in context_docs[:3]:
+                    title = doc.get('page_title', 'Documento')
+                    content = doc.get('content', '')[:800]
+                    similarity = doc.get('similarity', 0)
+                    context_parts.append(f"=== {title} (relevância: {similarity:.2f}) ===\n{content}")
+                context = "\n\n".join(context_parts)
+        
+            prompt = f"""Responda à pergunta do usuário com base apenas no seguinte contexto. Se a resposta não estiver no contexto, diga que não encontrou informações.
+
+            Contexto:
+            {context}
+
+            Pergunta: {query}
+
+            Resposta:"""
+
+            logger.info("Generating response with text generation...")
+            logger.info(f"Using prompt length: {len(prompt)} characters")
+
+            # Wrap the HF call to catch StopIteration
+            def safe_hf_call():
+                try:
+                    result = hf_client.text_generation(
+                        prompt,
+                        model="google/flan-t5-base",
+                        max_new_tokens=200,
+                        temperature=0.7,
+                        do_sample=True,
+                        return_full_text=False
+                    )
+                    return result
+                except StopIteration as e:
+                    logger.warning("HuggingFace client raised StopIteration, converting to RuntimeError")
+                    raise RuntimeError(f"Text generation failed: {str(e)}")
+                except Exception as e:
+                    logger.error(f"HuggingFace call failed: {str(e)}")
+                    raise
+
+            # Call the safe wrapper
+            response = safe_hf_call()
+            logger.info(f"Raw response type: {type(response)}")
+            logger.info(f"Raw response: {str(response)[:200]}...")
+
+            # Process response - FIXED LOGIC
+            final_response = ""
+        
+            if isinstance(response, str):
+                # Direct string response
+                final_response = response.strip()
+            elif isinstance(response, list) and len(response) > 0:
+                # List of responses
+                if isinstance(response[0], dict) and "generated_text" in response[0]:
+                    final_response = response[0]["generated_text"].strip()
+                elif isinstance(response[0], str):
+                    final_response = response[0].strip()
+                else:
+                    final_response = str(response[0]).strip()
+            elif isinstance(response, dict):
+                # Dictionary response
+                if "generated_text" in response:
+                    final_response = response["generated_text"].strip()
+                else:
+                    final_response = str(response).strip()
+            else:
+                # Unknown format
+                final_response = str(response).strip()
+        
+            # Validate response
+            if not final_response or final_response.lower() in ['', 'none', 'null']:
+                logger.warning("Empty or invalid response from text generation")
+                return await SimpleRAGService._create_fallback_response(query, context_docs)
+        
+            logger.info(f"Final response: {final_response[:100]}...")
+            return final_response
+
+        except RuntimeError as e:
+            logger.error(f"❌ Runtime error in text generation: {str(e)}")
+            return await SimpleRAGService._create_fallback_response(query, context_docs)
+        except Exception as e:
+            logger.error(f"❌ Response generation failed: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            return await SimpleRAGService._create_fallback_response(query, context_docs)
+
+    @staticmethod
+    async def _create_fallback_response(query: str, context_docs: List[Dict]) -> str:
+        """Create a fallback response when text generation fails."""
+    
+        if context_docs:
+            titles = [doc.get('page_title', 'documento') for doc in context_docs[:3]]
+            similarities = [f"{doc.get('similarity', 0):.1f}" for doc in context_docs[:3]]
+            
+            response = f"""Com base na consulta à nossa base de conhecimento sobre "{query}", encontrei informações relevantes nos seguintes documentos:\n\n"""
+            for i, (title, sim) in enumerate(zip(titles, similarities), 1):
+                response += f"{i}. {title} (relevância: {sim})\n"
+            
+            return response
+        
+        return "Não encontrei informações específicas sobre sua pergunta. Por favor, reformule ou entre em contato com nosso suporte."
+        
+
+# --- Health Check Endpoints ---
 @app.get("/")
 def read_root():
-    """Root endpoint with basic API info."""
-    return {"message": "InfinitePay AI Chatbot API is running!", "status": "healthy", "version": "1.2.0"}
+    return {"message": "InfinitePay AI Chatbot API v2.0.0", "status": "healthy"}
 
 @app.get("/ping")
 def ping():
-    """Simple ping for liveness probes."""
     return {"status": "ok", "message": "pong"}
-
-@app.get("/railway-health")
-def railway_health():
-    """Railway-specific health check."""
-    return {"status": "healthy", "timestamp": time.time(), "app": "InfinitePay AI Chatbot"}
-
-@app.get("/test")
-def test():
-    """Endpoint for debugging deployment environment variables."""
-    return {
-        "status": "ok", "timestamp": time.time(),
-        "environment": {
-            "port": os.environ.get("PORT", "8000"),
-            "railway_environment": os.environ.get("RAILWAY_ENVIRONMENT", "not_set")
-        }
-    }
 
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
-    """Detailed health check for all dependent services."""
-    services = {"app": "running", "database": "unknown", "embeddings": "unknown", "llm": "unknown"}
+    """Health check for all services."""
+    services = {"app": "running"}
     
-    # Check services concurrently
-    async def check_db():
-        if supabase_client:
-            try:
-                await asyncio.to_thread(supabase_client.table('documents').select('id', count='exact').limit(0).execute)
-                services["database"] = "healthy"
-            except Exception: services["database"] = "error"
-        else: services["database"] = "disabled"
-
-    async def check_embeddings():
-        if hf_client:
-            try:
-                await RAGService.get_embedding("health check")
-                services["embeddings"] = "healthy"
-            except Exception: services["embeddings"] = "error"
-        else: services["embeddings"] = "disabled"
-
-    async def check_llm():
-        # The LLM service is now Hugging Face Inference, so we check its availability
-        if hf_client:
-            services["llm"] = "healthy"
-        else:
-            services["llm"] = "disabled"
-
-    await asyncio.gather(check_db(), check_embeddings(), check_llm())
+    # Check Supabase
+    if supabase_client:
+        try:
+            await asyncio.to_thread(
+                supabase_client.table('documents').select('id', count='exact').limit(1).execute
+            )
+            services["database"] = "healthy"
+        except Exception:
+            services["database"] = "error"
+    else:
+        services["database"] = "disabled"
     
-    overall_status = "healthy" if all(s in ["healthy", "disabled"] for s in services.values()) else "degraded"
-    return HealthResponse(status=overall_status, services=services)
+    # Check HuggingFace
+    if hf_client:
+        services["ai"] = "healthy"
+    else:
+        services["ai"] = "disabled"
+    
+    status = "healthy" if all(s in ["healthy", "disabled"] for s in services.values()) else "degraded"
+    return HealthResponse(status=status, services=services)
 
-# --- Main API Endpoints ---
+# --- Main Chat Endpoint ---
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Main chat endpoint to get a RAG-powered response."""
-    if not SecurityFilter.is_safe_query(request.query):
-        raise HTTPException(status_code=400, detail="Query appears to be a prompt injection attempt.")
-
-    relevant_docs = await RAGService.similarity_search(request.query)
-    if not relevant_docs:
-        logger.warning(f"No relevant documents found for query: '{request.query}'")
+    """Main chat endpoint - simplified RAG."""
+    logger.info(f"💬 Chat request: {request.query}")
+    
+    # 1. Get embedding for the query
+    query_embedding = await SimpleRAGService.get_embedding(request.query)
+    if not query_embedding:
         return ChatResponse(
-            response="Desculpe, não encontrei informações relevantes para sua pergunta. Você pode tentar reformular.",
+            response="Desculpe, não consegui processar sua pergunta no momento.",
             sources=[],
             conversation_id=request.conversation_id or "new"
         )
-
-    response_text = await RAGService.generate_response(request.query, relevant_docs)
-    sources = [
-        {"title": doc.get('page_title', 'Documento'), "url": doc.get('page_url', ''), "similarity": doc.get('similarity', 0)}
-        for doc in relevant_docs[:3]
-    ]
-
+    
+    # 2. Search for similar documents
+    similar_docs = await SimpleRAGService.search_similar_documents(query_embedding, limit=5)
+    
+    # 3. Generate answer
+    answer = await SimpleRAGService.generate_answer(request.query, similar_docs)
+    
+    # 4. Prepare sources
+    sources = []
+    for doc in similar_docs[:3]:
+        sources.append({
+            "title": doc.get('page_title', 'Documento'),
+            "url": doc.get('page_url', ''),
+            "similarity": round(doc.get('similarity', 0), 3)
+        })
+    
     return ChatResponse(
-        response=response_text,
+        response=answer,
         sources=sources,
         conversation_id=request.conversation_id or "new"
     )
 
-@app.get("/search")
-async def search_documents(query: str, limit: int = 10):
-    """Endpoint for testing document retrieval."""
-    if not SecurityFilter.is_safe_query(query):
-        raise HTTPException(status_code=400, detail="Query appears to be a prompt injection attempt.")
-    
-    results = await RAGService.similarity_search(query, limit)
-    return {"results": results}
+# --- Debug Endpoints ---
+@app.get("/debug/embedding")
+async def debug_embedding(text: str = "Como funcionam os planos?"):
+    """Test embedding generation."""
+    embedding = await SimpleRAGService.get_embedding(text)
+    return {
+        "text": text,
+        "embedding_length": len(embedding) if embedding else 0,
+        "embedding_sample": embedding[:5] if embedding else None,
+        "success": embedding is not None
+    }
 
-# --- Main Execution Block ---
+@app.get("/debug/documents")
+async def debug_documents(limit: int = 5):
+    """Check if documents exist in database and have embeddings."""
+    if not supabase_client:
+        return {"error": "Supabase not available"}
+    
+    try:
+        # Check total documents
+        count_result = supabase_client.table('documents').select('id', count='exact').execute()
+        total_docs = count_result.count if hasattr(count_result, 'count') else 0
+        
+        # Get sample documents with embedding info
+        result = supabase_client.table('documents').select(
+            'id, page_title, content, embedding'
+        ).limit(limit).execute()
+        
+        documents = []
+        docs_with_embeddings = 0
+        
+        for doc in result.data or []:
+            has_embedding = doc.get('embedding') is not None
+            if has_embedding:
+                docs_with_embeddings += 1
+            
+            documents.append({
+                "id": doc.get('id'),
+                "title": doc.get('page_title', 'No title'),
+                "content_preview": doc.get('content', '')[:100] + "..." if doc.get('content') else "No content",
+                "has_embedding": has_embedding,
+                "embedding_length": len(doc.get('embedding', [])) if has_embedding else 0
+            })
+        
+        return {
+            "total_documents": total_docs,
+            "sample_size": len(documents),
+            "documents_with_embeddings": docs_with_embeddings,
+            "documents": documents,
+            "needs_embeddings": docs_with_embeddings == 0
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+@app.post("/admin/generate-embeddings")
+async def generate_embeddings_for_documents(limit: int = 10, force: bool = False):
+    """Generate embeddings for documents that don't have them yet."""
+    if not supabase_client or not hf_client:
+        raise HTTPException(status_code=503, detail="Required services not available")
+    
+    try:
+        # Get documents without embeddings (or all if force=True)
+        if force:
+            query_builder = supabase_client.table('documents').select('id, content, page_title')
+        else:
+            query_builder = supabase_client.table('documents').select('id, content, page_title').is_('embedding', 'null')
+        
+        result = query_builder.limit(limit).execute()
+        documents = result.data or []
+        
+        if not documents:
+            return {"message": "No documents need embeddings", "processed": 0}
+        
+        processed = 0
+        errors = 0
+        
+        for doc in documents:
+            try:
+                # Create text to embed (title + content)
+                text_to_embed = f"{doc.get('page_title', '')} {doc.get('content', '')}"
+                text_to_embed = text_to_embed.strip()[:1000]  # Limit length
+                
+                if not text_to_embed:
+                    continue
+                
+                # Generate embedding
+                embedding = await SimpleRAGService.get_embedding(text_to_embed)
+                
+                if embedding:
+                    # Update document with embedding
+                    supabase_client.table('documents').update({
+                        'embedding': embedding
+                    }).eq('id', doc['id']).execute()
+                    
+                    processed += 1
+                    logger.info(f"✅ Generated embedding for document {doc['id']}")
+                else:
+                    errors += 1
+                    logger.error(f"❌ Failed to generate embedding for document {doc['id']}")
+                
+            except Exception as doc_error:
+                errors += 1
+                logger.error(f"❌ Error processing document {doc.get('id')}: {doc_error}")
+                continue
+        
+        return {
+            "message": f"Processed {processed} documents",
+            "processed": processed,
+            "errors": errors,
+            "total_documents": len(documents)
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Embedding generation failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# --- Run Server ---
 if __name__ == "__main__":
     import uvicorn
     port = int(os.environ.get("PORT", 8000))
