@@ -37,9 +37,7 @@ app.add_middleware(
         "http://localhost:3000",
         "http://localhost:5173",
         "https://giovanasiquieroli.com.br",
-        "https://giovanasiquieroli.com",
-        "https://www.giovanasiquieroli.com.br",
-        "https://www.giovanasiquieroli.com"
+        "https://www.giovanasiquieroli.com.br"
     ],
     allow_credentials=True,
     allow_methods=["*"],
