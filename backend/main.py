@@ -274,65 +274,49 @@ class SimpleRAGService:
                 try:
                     result = hf_client.text_generation(
                         prompt,
-                        model="google/flan-t5-base",
+                        model="unsloth/gemma-3-270m-it-GGUF",
                         max_new_tokens=200,
                         temperature=0.7,
                         do_sample=True,
+                        stream=True,
                         return_full_text=False
                     )
                     return result
-                except StopIteration as e:
-                    logger.warning("HuggingFace client raised StopIteration, converting to RuntimeError")
-                    raise RuntimeError(f"Text generation failed: {str(e)}")
                 except Exception as e:
                     logger.error(f"HuggingFace call failed: {str(e)}")
-                    raise
+                    raise RuntimeError(f"Text generation failed: {str(e)}")  # Fixed missing parenthesis
 
+            
             # Call the safe wrapper
             response = safe_hf_call()
-            logger.info(f"Raw response type: {type(response)}")
-            logger.info(f"Raw response: {str(response)[:200]}...")
-
-            # Process response - FIXED LOGIC
             final_response = ""
-        
-            if isinstance(response, str):
-                # Direct string response
-                final_response = response.strip()
-            elif isinstance(response, list) and len(response) > 0:
-                # List of responses
-                if isinstance(response[0], dict) and "generated_text" in response[0]:
-                    final_response = response[0]["generated_text"].strip()
-                elif isinstance(response[0], str):
-                    final_response = response[0].strip()
-                else:
-                    final_response = str(response[0]).strip()
-            elif isinstance(response, dict):
-                # Dictionary response
-                if "generated_text" in response:
-                    final_response = response["generated_text"].strip()
-                else:
-                    final_response = str(response).strip()
-            else:
-                # Unknown format
-                final_response = str(response).strip()
-        
+
+            # Iterate over streaming chunks
+            try:
+            
+                for chunk in response:
+                    final_response += chunk.token.text
+            except StopIteration as e:
+                logger.warning("Stream ended with StopIteration")
+            except Exception as e:
+                logger.error(f"Error during streaming: {str(e)}")
+                return await SimpleRAGService._create_fallback_response(query, context_docs)
+    
             # Validate response
-            if not final_response or final_response.lower() in ['', 'none', 'null']:
+            if not final_response or final_response.strip().lower() in ['', 'none', 'null']:
                 logger.warning("Empty or invalid response from text generation")
                 return await SimpleRAGService._create_fallback_response(query, context_docs)
-        
+
             logger.info(f"Final response: {final_response[:100]}...")
-            return final_response
+            return final_response.strip()
 
-        except RuntimeError as e:
-            logger.error(f"❌ Runtime error in text generation: {str(e)}")
-            return await SimpleRAGService._create_fallback_response(query, context_docs)
         except Exception as e:
-            logger.error(f"❌ Response generation failed: {str(e)}")
-            logger.error(f"Error type: {type(e)}")
+            logger.error(f"❌ HuggingFace API Error - Type: {type(e)}")
+            logger.error(f"❌ Error message: {str(e)}")
+            import traceback
+            logger.error(f"❌ Full traceback: {traceback.format_exc()}")
             return await SimpleRAGService._create_fallback_response(query, context_docs)
-
+    
     @staticmethod
     async def _create_fallback_response(query: str, context_docs: List[Dict]) -> str:
         """Create a fallback response when text generation fails."""
