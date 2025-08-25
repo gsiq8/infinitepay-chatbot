@@ -272,7 +272,7 @@ class SimpleRAGService:
                 try:
                     result = hf_client.text_generation(
                         prompt,
-                        model="unsloth/gemma-3-270m-it-GGUF",
+                        model="CohereLabs/command-a-reasoning-08-2025",
                         max_new_tokens=200,
                         temperature=0.7,
                         do_sample=True,
