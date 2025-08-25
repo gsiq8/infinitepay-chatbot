@@ -282,7 +282,7 @@ class SimpleRAGService:
                     completion = client.chat.completions.create(
                         messages=messages,  # Changed from prompt to messages
                         model="meta-llama/Llama-3.1-8B-Instruct",
-                        stream=False
+                        stream=True
                     )
                     return completion
                 except Exception as e:
@@ -292,12 +292,33 @@ class SimpleRAGService:
             # Call the safe wrapper
             response = safe_hf_call()
             final_response = ""
+            inside_think = False
         
             # Iterate over streaming chunks
             try:
                 for chunk in response:
                     if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                        final_response += chunk.choices[0].delta.content
+                        content = chunk.choices[0].delta.content
+
+                        # Filter out reasoning tokens
+                    if "<think>" in content:
+                        inside_think = True
+                        # Remove the <think> part and anything before it in this chunk
+                        content = content.split("<think>")[0]
+                    
+                    if "</think>" in content:
+                        inside_think = False
+                        # Remove the </think> part and anything before it in this chunk
+                        parts = content.split("</think>")
+                        if len(parts) > 1:
+                            content = parts[1]  # Take everything after </think>
+                        else:
+                            content = ""
+
+                        # Only add content if we're not inside thinking tags
+                    if not inside_think and content:
+                        final_response += content
+                           
             except StopIteration as e:
                 logger.warning("Stream ended with StopIteration")
             except Exception as e:
