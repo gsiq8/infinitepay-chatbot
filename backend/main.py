@@ -237,29 +237,6 @@ class SimpleRAGService:
         
         return []
 
-    
-    @staticmethod
-    async def text_search_fallback(limit: int) -> List[Dict]:
-        """Fallback to simple text search if vector search fails."""
-        try:
-            logger.info("🔄 Using text search fallback...")
-            # Simple search by content - for testing
-            result = supabase_client.table('documents').select(
-                'id, page_title, content, page_url'
-            ).limit(limit).execute()
-            
-            if result.data:
-                # Add mock similarity scores
-                for doc in result.data:
-                    doc['similarity'] = 0.5
-                logger.info(f"✅ Fallback found {len(result.data)} documents")
-                return result.data
-            
-        except Exception as e:
-            logger.error(f"❌ Text search fallback failed: {e}")
-        
-        return []
-
     @staticmethod
     async def generate_answer(query: str, context_docs: List[Dict]) -> str:
         """Generate answer using context documents."""
@@ -303,7 +280,7 @@ class SimpleRAGService:
             def safe_hf_call():
                 try:
                     completion = client.chat.completions.create(
-                        messages=messages,  # Changed from prompt to messages
+                        messages=messages, 
                         model="meta-llama/Llama-3.1-8B-Instruct",
                         stream=False
                     )
@@ -314,18 +291,51 @@ class SimpleRAGService:
         
             # Call the safe wrapper
             response = safe_hf_call()
-            final_response = ""
+            #final_response = ""
+            #inside_think = False
         
-            # Iterate over streaming chunks
+            # Extract the response content (non-streaming)
             try:
-                for chunk in response:
-                    if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                        final_response += chunk.choices[0].delta.content
-            except StopIteration as e:
-                logger.warning("Stream ended with StopIteration")
+                if response.choices and len(response.choices) > 0:
+                    final_response = response.choices[0].message.content
+                else:
+                    logger.warning("No choices in response")
+                    return await SimpleRAGService._create_fallback_response(query, context_docs)
             except Exception as e:
-                logger.error(f"Error during streaming: {str(e)}")
+                logger.error(f"Error extracting response: {str(e)}")
                 return await SimpleRAGService._create_fallback_response(query, context_docs)
+        
+
+            # Iterate over streaming chunks
+            #try:
+                #for chunk in response:
+                    #if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                        #content = chunk.choices[0].delta.content
+
+                        # Filter out reasoning tokens
+                    #if "<think>" in content:
+                        #inside_think = True
+                        # Remove the <think> part and anything before it in this chunk
+                        #content = content.split("<think>")[0]
+                    
+                    #if "</think>" in content:
+                        #inside_think = False
+                        # Remove the </think> part and anything before it in this chunk
+                        #parts = content.split("</think>")
+                        #if len(parts) > 1:
+                            #content = parts[1]  # Take everything after </think>
+                        #else:
+                            #content = ""
+
+                        # Only add content if we're not inside thinking tags
+                    #if not inside_think and content:
+                        #final_response += content
+
+            #except StopIteration as e:
+                #logger.warning("Stream ended with StopIteration")
+            #except Exception as e:
+                #logger.error(f"Error during streaming: {str(e)}")
+                #return await SimpleRAGService._create_fallback_response(query, context_docs)
         
             # Validate response
             if not final_response or final_response.strip().lower() in ['', 'none', 'null']:
