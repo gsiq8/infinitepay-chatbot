@@ -60,13 +60,13 @@ class HealthResponse(BaseModel):
 
 # --- Global Variables ---
 supabase_client: Client = None
-hf_client: InferenceClient = None
+client: InferenceClient = None
 
 # --- Startup Event ---
 @app.on_event("startup")
 async def startup_event():
     """Initialize services on application startup."""
-    global supabase_client, hf_client
+    global supabase_client, client
 
     logger.info("🚀 Starting InfinitePay AI Chatbot v2.0.0 (Simplified)")
 
@@ -94,14 +94,14 @@ async def startup_event():
     # Initialize Hugging Face Inference Client
     if hf_token:
         try:
-            hf_client = InferenceClient(
+            client = InferenceClient(
                 provider="auto",
                 api_key=hf_token
             )
             logger.info("✅ Hugging Face Inference Client initialized.")
         except Exception as e:
             logger.error(f"❌ Hugging Face Inference Client initialization failed: {e}")
-            hf_client = None
+            client = None
     else:
         logger.warning("⚠️ HF_TOKEN not found. AI features will be disabled.")
 
@@ -114,14 +114,14 @@ class SimpleRAGService:
     @staticmethod
     async def get_embedding(text: str) -> Optional[List[float]]:
         """Generate embedding using HuggingFace."""
-        if not hf_client:
+        if not client:
             logger.warning("HuggingFace client not available.")
             return None
         
         try:
             logger.info(f"🔢 Generating embedding for: {text[:50]}...")
             embedding = await asyncio.to_thread(
-                hf_client.feature_extraction,
+                client.feature_extraction,
                 text,
                 model="sentence-transformers/all-MiniLM-L6-v2"
             )
@@ -237,10 +237,33 @@ class SimpleRAGService:
         
         return []
 
+    
     @staticmethod
-    async def generate_answer(query: str, context_docs: List[Dict]) -> str: 
+    async def text_search_fallback(limit: int) -> List[Dict]:
+        """Fallback to simple text search if vector search fails."""
+        try:
+            logger.info("🔄 Using text search fallback...")
+            # Simple search by content - for testing
+            result = supabase_client.table('documents').select(
+                'id, page_title, content, page_url'
+            ).limit(limit).execute()
+            
+            if result.data:
+                # Add mock similarity scores
+                for doc in result.data:
+                    doc['similarity'] = 0.5
+                logger.info(f"✅ Fallback found {len(result.data)} documents")
+                return result.data
+            
+        except Exception as e:
+            logger.error(f"❌ Text search fallback failed: {e}")
+        
+        return []
+
+    @staticmethod
+    async def generate_answer(query: str, context_docs: List[Dict]) -> str:
         """Generate answer using context documents."""
-        if not hf_client:
+        if not client:
             return "Desculpe, o serviço de IA está temporariamente indisponível."
     
         try:
@@ -255,59 +278,63 @@ class SimpleRAGService:
                     context_parts.append(f"=== {title} (relevância: {similarity:.2f}) ===\n{content}")
                 context = "\n\n".join(context_parts)
         
-            prompt = f"""Responda à pergunta do usuário com base apenas no seguinte contexto. Se a resposta não estiver no contexto, diga que não encontrou informações.
+            # Create system message with context
+            system_content = f"""Responda à pergunta do usuário com base apenas no seguinte contexto. Se a resposta não estiver no contexto, diga que não encontrou informações.
 
-            Contexto:
-            {context}
-
-            Pergunta: {query}
-
-            Resposta:"""
-
+    Contexto:
+    {context}"""
+        
+            # Prepare messages in the correct format
+            messages = [
+                {
+                    "role": "system",
+                    "content": system_content
+                },
+                {
+                    "role": "user", 
+                    "content": query
+                }
+            ]
+        
             logger.info("Generating response with text generation...")
-            logger.info(f"Using prompt length: {len(prompt)} characters")
-
+            logger.info(f"Using messages with {len(messages)} items")
+        
             # Wrap the HF call to catch StopIteration
             def safe_hf_call():
                 try:
-                    result = hf_client.text_generation(
-                        prompt,
-                        model="CohereLabs/command-a-reasoning-08-2025",
-                        max_new_tokens=200,
-                        temperature=0.7,
-                        do_sample=True,
-                        stream=True,
-                        return_full_text=False
+                    completion = client.chat.completions.create(
+                        messages=messages,  # Changed from prompt to messages
+                        model="meta-llama/Llama-3.1-8B-Instruct",
+                        stream=False
                     )
-                    return result
+                    return completion
                 except Exception as e:
                     logger.error(f"HuggingFace call failed: {str(e)}")
-                    raise RuntimeError(f"Text generation failed: {str(e)}")  # Fixed missing parenthesis
-
-            
+                    raise RuntimeError(f"Text generation failed: {str(e)}")
+        
             # Call the safe wrapper
             response = safe_hf_call()
             final_response = ""
-
+        
             # Iterate over streaming chunks
             try:
-            
                 for chunk in response:
-                    final_response += chunk.token.text
+                    if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                        final_response += chunk.choices[0].delta.content
             except StopIteration as e:
                 logger.warning("Stream ended with StopIteration")
             except Exception as e:
                 logger.error(f"Error during streaming: {str(e)}")
                 return await SimpleRAGService._create_fallback_response(query, context_docs)
-    
+        
             # Validate response
             if not final_response or final_response.strip().lower() in ['', 'none', 'null']:
                 logger.warning("Empty or invalid response from text generation")
                 return await SimpleRAGService._create_fallback_response(query, context_docs)
-
+        
             logger.info(f"Final response: {final_response[:100]}...")
             return final_response.strip()
-
+        
         except Exception as e:
             logger.error(f"❌ HuggingFace API Error - Type: {type(e)}")
             logger.error(f"❌ Error message: {str(e)}")
@@ -359,7 +386,7 @@ async def health_check():
         services["database"] = "disabled"
     
     # Check HuggingFace
-    if hf_client:
+    if client:
         services["ai"] = "healthy"
     else:
         services["ai"] = "disabled"
@@ -460,7 +487,7 @@ async def debug_documents(limit: int = 5):
 @app.post("/admin/generate-embeddings")
 async def generate_embeddings_for_documents(limit: int = 10, force: bool = False):
     """Generate embeddings for documents that don't have them yet."""
-    if not supabase_client or not hf_client:
+    if not supabase_client or not client:
         raise HTTPException(status_code=503, detail="Required services not available")
     
     try:
