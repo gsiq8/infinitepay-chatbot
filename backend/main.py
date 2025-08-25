@@ -280,9 +280,9 @@ class SimpleRAGService:
             def safe_hf_call():
                 try:
                     completion = client.chat.completions.create(
-                        messages=messages,  # Changed from prompt to messages
+                        messages=messages, 
                         model="meta-llama/Llama-3.1-8B-Instruct",
-                        stream=True
+                        stream=False
                     )
                     return completion
                 except Exception as e:
@@ -291,39 +291,51 @@ class SimpleRAGService:
         
             # Call the safe wrapper
             response = safe_hf_call()
-            final_response = ""
-            inside_think = False
+            #final_response = ""
+            #inside_think = False
         
-            # Iterate over streaming chunks
+            # Extract the response content (non-streaming)
             try:
-                for chunk in response:
-                    if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                        content = chunk.choices[0].delta.content
+                if response.choices and len(response.choices) > 0:
+                    final_response = response.choices[0].message.content
+                else:
+                    logger.warning("No choices in response")
+                    return await SimpleRAGService._create_fallback_response(query, context_docs)
+            except Exception as e:
+                logger.error(f"Error extracting response: {str(e)}")
+                return await SimpleRAGService._create_fallback_response(query, context_docs)
+        
+
+            # Iterate over streaming chunks
+            #try:
+                #for chunk in response:
+                    #if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+                        #content = chunk.choices[0].delta.content
 
                         # Filter out reasoning tokens
-                    if "<think>" in content:
-                        inside_think = True
+                    #if "<think>" in content:
+                        #inside_think = True
                         # Remove the <think> part and anything before it in this chunk
-                        content = content.split("<think>")[0]
+                        #content = content.split("<think>")[0]
                     
-                    if "</think>" in content:
-                        inside_think = False
+                    #if "</think>" in content:
+                        #inside_think = False
                         # Remove the </think> part and anything before it in this chunk
-                        parts = content.split("</think>")
-                        if len(parts) > 1:
-                            content = parts[1]  # Take everything after </think>
-                        else:
-                            content = ""
+                        #parts = content.split("</think>")
+                        #if len(parts) > 1:
+                            #content = parts[1]  # Take everything after </think>
+                        #else:
+                            #content = ""
 
                         # Only add content if we're not inside thinking tags
-                    if not inside_think and content:
-                        final_response += content
-                           
-            except StopIteration as e:
-                logger.warning("Stream ended with StopIteration")
-            except Exception as e:
-                logger.error(f"Error during streaming: {str(e)}")
-                return await SimpleRAGService._create_fallback_response(query, context_docs)
+                    #if not inside_think and content:
+                        #final_response += content
+
+            #except StopIteration as e:
+                #logger.warning("Stream ended with StopIteration")
+            #except Exception as e:
+                #logger.error(f"Error during streaming: {str(e)}")
+                #return await SimpleRAGService._create_fallback_response(query, context_docs)
         
             # Validate response
             if not final_response or final_response.strip().lower() in ['', 'none', 'null']:
