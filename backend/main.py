@@ -16,6 +16,7 @@ from typing import List, Dict, Optional, Any
 import asyncio
 from supabase import create_client, Client
 from huggingface_hub import InferenceClient
+from huggingface_hub.utils._auth import get_token
 import logging
 import numpy as np
 
@@ -73,7 +74,7 @@ async def startup_event():
     # Environment variable check
     supabase_url = os.getenv('SUPABASE_URL')
     supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
-    hf_token = os.getenv('HF_TOKEN')
+    hf_token = os.getenv('HF_TOKEN') or get_token()
 
     logger.info("🔍 Environment check:")
     logger.info(f"   SUPABASE_URL: {'✅ Set' if supabase_url else '❌ Not set'}")
