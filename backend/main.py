@@ -281,7 +281,8 @@ class SimpleRAGService:
                 try:
                     completion = client.chat.completions.create(
                         messages=messages,  # Changed from prompt to messages
-                        model="meta-llama/Llama-3.1-8B-Instruct"
+                        model="meta-llama/Llama-3.1-8B-Instruct",
+                        stream=False
                     )
                     return completion
                 except Exception as e:
