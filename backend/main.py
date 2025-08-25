@@ -276,7 +276,7 @@ class SimpleRAGService:
                         messages=[
                             {
                                 "role": "user",
-                                "content": "What is the capital of France?"
+                                "content": prompt
                             }
                         ],
                     )
