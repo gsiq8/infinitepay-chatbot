@@ -272,7 +272,7 @@ class SimpleRAGService:
                 try:
                     result = hf_client.text_generation(
                         prompt,
-                        model="CohereLabs/command-a-reasoning-08-2025",
+                        model="Qwen/Qwen3-32B",
                         max_new_tokens=200,
                         temperature=0.7,
                         do_sample=True,
