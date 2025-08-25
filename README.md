@@ -4,15 +4,17 @@ This branch reproduces the `StopIteration` error when using Hugging Face Inferen
 
 ## Setup
 1. Clone repo and checkout this branch:
-   git clone <[https://github.com/gsiq8/infinitepay-chatbot.git]>
-   git checkout bug/stopiteration-hf-inference
 
-2. Create `.env` from `.env.example` and add your keys.
+      git clone <[https://github.com/gsiq8/infinitepay-chatbot.git]>
 
-3. Install deps:
+      git checkout bug/stopiteration-hf-inference
+
+3. Create `.env` from `.env.example` and add your keys.
+
+4. Install deps:
    pip install -r requirements.txt
 
-4. Run:
+5. Run:
    uvicorn backend.main:app --reload
    * or python backend/repro.py (if you isolate into a single script)
 
