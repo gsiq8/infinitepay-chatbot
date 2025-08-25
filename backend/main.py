@@ -16,6 +16,7 @@ from typing import List, Dict, Optional, Any
 import asyncio
 from supabase import create_client, Client
 from huggingface_hub import InferenceClient
+from huggingface_hub.utils._auth import get_token
 import logging
 import numpy as np
 
@@ -73,7 +74,7 @@ async def startup_event():
     # Environment variable check
     supabase_url = os.getenv('SUPABASE_URL')
     supabase_key = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
-    hf_token = os.getenv('HF_TOKEN')
+    hf_token = os.getenv('HF_TOKEN') or get_token()
 
     logger.info("🔍 Environment check:")
     logger.info(f"   SUPABASE_URL: {'✅ Set' if supabase_url else '❌ Not set'}")
@@ -270,15 +271,16 @@ class SimpleRAGService:
             # Wrap the HF call to catch StopIteration
             def safe_hf_call():
                 try:
-                    result = hf_client.text_generation(
-                        prompt,
-                        model="unsloth/gemma-3-270m-it-GGUF",
-                        max_new_tokens=200,
-                        temperature=0.7,
-                        do_sample=True,
-                        stream=True,
-                        return_full_text=False
+                    completion = hf_client.chat.completions.create(
+                        model="HuggingFaceTB/SmolLM3-3B",
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": "What is the capital of France?"
+                            }
+                        ],
                     )
+                    result = completion.choices[0].message.content
                     return result
                 except Exception as e:
                     logger.error(f"HuggingFace call failed: {str(e)}")
