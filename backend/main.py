@@ -240,118 +240,117 @@ class SimpleRAGService:
 
     @staticmethod
     async def generate_answer(query: str, context_docs: List[Dict]) -> str:
-        """Generate answer using context documents."""
+        """Generate answer using context documents with crash protection."""
         if not client:
+            logger.warning("Client not available")
             return "Desculpe, o serviço de IA está temporariamente indisponível."
     
         try:
-            # Build context from documents
-            context = ""
-            if context_docs:
-                context_parts = []
-                for doc in context_docs[:3]:
-                    title = doc.get('page_title', 'Documento')
-                    content = doc.get('content', '')[:800]
-                    similarity = doc.get('similarity', 0)
-                    context_parts.append(f"=== {title} (relevância: {similarity:.2f}) ===\n{content}")
-                context = "\n\n".join(context_parts)
+            # Timeout protection
+            import asyncio
         
-            # Create system message with context
-            system_content = f"""Responda à pergunta do usuário com base apenas no seguinte contexto. Se a resposta não estiver no contexto, diga que não encontrou informações.
+            async def _generate_with_timeout():
+                # Build context from documents
+                context = ""
+                if context_docs:
+                    context_parts = []
+                    logger.info(f"Processing {len(context_docs)} documents")
+                
+                    for i, doc in enumerate(context_docs[:3]):  # Limit to 3 docs
+                        try:
+                            title = str(doc.get('page_title', 'Documento'))[:100]  # Limit title length
+                            content = str(doc.get('content', ''))[:600]  # Limit content length
+                            similarity = float(doc.get('similarity', 0))
+                        
+                            logger.info(f"Doc {i+1}: {title[:50]}... (sim: {similarity:.3f})")
+                            context_parts.append(f"=== {title} ===\n{content}")
+                        
+                        except Exception as doc_error:
+                            logger.error(f"Error processing doc {i}: {doc_error}")
+                            continue
+                
+                    context = "\n\n".join(context_parts)
+                
+                    # Limit total context size to prevent memory issues
+                    if len(context) > 3000:
+                        context = context[:3000] + "..."
+                        logger.warning("Context truncated due to length")
+                    
+                else:
+                    logger.warning("No context documents provided")
+                    return "Não encontrei informações relevantes para responder sua pergunta."
+            
+                if not context.strip():
+                    logger.warning("Empty context after processing")
+                    return "Não foi possível processar as informações encontradas."
+            
+                # Create simple, concise system message
+                system_content = f"""Responda com base apenas no contexto fornecido. Se não souber, diga que não encontrou a informação.
 
     Contexto:
     {context}"""
-        
-            # Prepare messages in the correct format
-            messages = [
-                {
-                    "role": "system",
-                    "content": system_content
-                },
-                {
-                    "role": "user", 
-                    "content": query
-                }
-            ]
-        
-            logger.info("Generating response with text generation...")
-            logger.info(f"Using messages with {len(messages)} items")
-        
-            # Wrap the HF call to catch StopIteration
-            def safe_hf_call():
+            
+                messages = [
+                    {"role": "system", "content": system_content},
+                    {"role": "user", "content": query}
+                ]
+            
+                logger.info(f"Making API call with context length: {len(context)}")
+            
                 try:
-                    completion = client.chat.completions.create(
-                        messages=messages, 
-                        model="meta-llama/Llama-3.1-8B-Instruct",
-                        stream=False
+                    # Make the API call with timeout
+                    response = client.chat.completions.create(
+                        messages=messages,
+                        model="Qwen/Qwen3-32B",
+                        stream=False,
+                        max_tokens=300,  # Shorter responses
+                        temperature=0.2,
+                        timeout=30  # 30 second timeout
                     )
-                    return completion
-                except Exception as e:
-                    logger.error(f"HuggingFace call failed: {str(e)}")
-                    raise RuntimeError(f"Text generation failed: {str(e)}")
+                
+                    if not response or not response.choices:
+                        logger.error("Empty response from API")
+                        return "Desculpe, houve um problema ao gerar a resposta."
+                
+                    content = response.choices[0].message.content
+                    if not content:
+                        logger.error("Empty content in response")
+                        return "Não consegui gerar uma resposta adequada."
+                
+                    # Clean up response
+                    content = content.strip()
+                
+                    # Remove reasoning tokens if present
+                    import re
+                    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+                
+                    logger.info(f"Generated response: {content[:100]}...")
+                    return content
+                
+                except Exception as api_error:
+                    logger.error(f"API call failed: {str(api_error)}")
+                    logger.error(f"API error type: {type(api_error)}")
+                    return "Desculpe, o serviço está temporariamente indisponível. Tente novamente em alguns minutos."
         
-            # Call the safe wrapper
-            response = safe_hf_call()
-            #final_response = ""
-            #inside_think = False
-        
-            # Extract the response content (non-streaming)
+            # Run with timeout to prevent hanging
             try:
-                if response.choices and len(response.choices) > 0:
-                    final_response = response.choices[0].message.content
-                else:
-                    logger.warning("No choices in response")
-                    return await SimpleRAGService._create_fallback_response(query, context_docs)
-            except Exception as e:
-                logger.error(f"Error extracting response: {str(e)}")
+                result = await asyncio.wait_for(_generate_with_timeout(), timeout=45.0)
+                return result
+            except asyncio.TimeoutError:
+                logger.error("Request timed out")
+                return "Desculpe, a consulta demorou muito para ser processada. Tente novamente."
+            
+        except Exception as outer_error:
+            # Catch-all to prevent crashes
+            logger.error(f"Critical error in generate_answer: {str(outer_error)}")
+            logger.error(f"Error type: {type(outer_error)}")
+        
+            # Don't raise the exception - return a safe fallback
+            try:
                 return await SimpleRAGService._create_fallback_response(query, context_docs)
-        
-
-            # Iterate over streaming chunks
-            #try:
-                #for chunk in response:
-                    #if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-                        #content = chunk.choices[0].delta.content
-
-                        # Filter out reasoning tokens
-                    #if "<think>" in content:
-                        #inside_think = True
-                        # Remove the <think> part and anything before it in this chunk
-                        #content = content.split("<think>")[0]
-                    
-                    #if "</think>" in content:
-                        #inside_think = False
-                        # Remove the </think> part and anything before it in this chunk
-                        #parts = content.split("</think>")
-                        #if len(parts) > 1:
-                            #content = parts[1]  # Take everything after </think>
-                        #else:
-                            #content = ""
-
-                        # Only add content if we're not inside thinking tags
-                    #if not inside_think and content:
-                        #final_response += content
-
-            #except StopIteration as e:
-                #logger.warning("Stream ended with StopIteration")
-            #except Exception as e:
-                #logger.error(f"Error during streaming: {str(e)}")
-                #return await SimpleRAGService._create_fallback_response(query, context_docs)
-        
-            # Validate response
-            if not final_response or final_response.strip().lower() in ['', 'none', 'null']:
-                logger.warning("Empty or invalid response from text generation")
-                return await SimpleRAGService._create_fallback_response(query, context_docs)
-        
-            logger.info(f"Final response: {final_response[:100]}...")
-            return final_response.strip()
-        
-        except Exception as e:
-            logger.error(f"❌ HuggingFace API Error - Type: {type(e)}")
-            logger.error(f"❌ Error message: {str(e)}")
-            import traceback
-            logger.error(f"❌ Full traceback: {traceback.format_exc()}")
-            return await SimpleRAGService._create_fallback_response(query, context_docs)
+            except Exception as fallback_error:
+                logger.error(f"Even fallback failed: {fallback_error}")
+                return "Desculpe, estou com dificuldades técnicas no momento. Tente novamente mais tarde."
     
     @staticmethod
     async def _create_fallback_response(query: str, context_docs: List[Dict]) -> str:
